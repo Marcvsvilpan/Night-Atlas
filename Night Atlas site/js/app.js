@@ -643,9 +643,9 @@ async function handleCitySearch(query) {
 }
 
 function exportBibtex() {
-  const bib = `@article{epithanes2026nightatlas,
+  const bib = `@article{vilpan2026nightatlas,
   title   = {Satellite-Calibrated Urban Skyglow and Municipal Lighting Mitigation: A Radiative Transfer Framework},
-  author  = {Epithanes},
+  author  = {Vilpan, Mark},
   year    = {2026},
   journal = {Night Atlas Technical Preprint},
   note    = {Calibrated against NASA Black Marble VNP46A2/VNP46A4 VIIRS Day/Night Band Radiance}
