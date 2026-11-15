@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Troparyovo Ecological Buffer Zone",
+        "zone_type": "Protected Greenbelt",
+        "target_ufr": 0.01
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [37.479, 55.651],
+            [37.491, 55.651],
+            [37.491, 55.659],
+            [37.479, 55.659],
+            [37.479, 55.651]
+          ]
+        ]
+      }
+    }
+  ]
+}

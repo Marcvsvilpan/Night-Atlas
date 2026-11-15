@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use Night Atlas in academic research, please cite it using this metadata."
+title: "Night Atlas: Satellite-Calibrated Urban Skyglow & Municipal Lighting Mitigation Lab"
+authors:
+  - alias: "Epithanes"
+version: "2.6.0"
+date-released: "2026-11-16"
+license: "MIT"
+keywords:
+  - light pollution
+  - NASA Black Marble
+  - VIIRS
+  - radiative transfer
+  - urban planning
