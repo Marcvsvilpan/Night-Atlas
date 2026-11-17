@@ -1,1 +1,285 @@
-<meta http-equiv="refresh" content="0; url=Night%20Atlas%20site/" />
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Night Atlas — Urban Skyglow &amp; Municipal Lighting Mitigation Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <span class="brand-title">Night Atlas</span>
+      <span class="brand-sub">International Skyglow Lab</span>
+    </div>
+
+    <nav class="nav-tabs" aria-label="Primary Navigation">
+      <button class="nav-tab active" data-view="atlas">01 Atlas &amp; Simulation</button>
+      <button class="nav-tab" data-view="scenarios">02 Scenario Lab</button>
+      <button class="nav-tab" data-view="physics">03 Physics &amp; Math</button>
+      <button class="nav-tab" data-view="research">04 Research Paper</button>
+    </nav>
+
+    <div class="topbar-actions">
+      <button class="btn btn-primary" id="btn-topbar-paper">Manuscript &amp; PDF</button>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <section id="view-atlas" class="view-panel active">
+      <div class="atlas-layout">
+        <div id="map-container"></div>
+
+        <div class="map-floating-top">
+          <div class="search-wrap">
+            <input
+              id="search-input"
+              class="search-input"
+              type="text"
+              placeholder="Search any global municipality (e.g., Flagstaff, Geneva, Tokyo)..."
+              autocomplete="off"
+            />
+            <div id="search-dropdown" class="search-dropdown"></div>
+          </div>
+          <div class="pill-divider"></div>
+          <div class="seg-group">
+            <button class="seg-btn basemap-btn active" data-basemap="dark">Obsidian</button>
+            <button class="seg-btn basemap-btn" data-basemap="streets">Streets</button>
+            <button class="seg-btn basemap-btn" data-basemap="satellite">Satellite</button>
+          </div>
+          <div class="pill-divider"></div>
+          <button class="seg-btn viirs-on" id="btn-viirs-toggle" title="NASA GIBS VIIRS Black Marble Overlay">
+            NASA VIIRS
+          </button>
+        </div>
+
+        <aside class="dock-left">
+          <div>
+            <div class="dock-section-label">International Benchmark</div>
+            <select id="city-preset-select" class="city-select">
+              <option value="moscow">Moscow · Southern Observatory Corridor</option>
+              <option value="flagstaff">Flagstaff · Lowell Dark-Sky Buffer</option>
+              <option value="paranal">Antofagasta · Paranal Buffer Zone</option>
+              <option value="lavaux">Lavaux · Lake Geneva Corridor</option>
+              <option value="melbourne">Melbourne · Yarra River Buffer</option>
+            </select>
+            <p id="city-desc" style="font-size:11.5px;color:var(--text-secondary);margin:8px 0 0;"></p>
+          </div>
+
+          <div>
+            <div class="dock-section-label">Mitigation Scenarios</div>
+            <div class="scenario-list">
+              <button class="scenario-card active" data-scenario="baseline">
+                <div class="scenario-name">Baseline Reference</div>
+                <div class="scenario-meta">Unmitigated 4000K · UFR 0.14</div>
+              </button>
+              <button class="scenario-card" data-scenario="curfew">
+                <div class="scenario-name">Midnight Adaptive Dimming</div>
+                <div class="scenario-meta">50% Dimming 23:00–05:00</div>
+              </button>
+              <button class="scenario-card" data-scenario="shield_warm">
+                <div class="scenario-name">Full-Cutoff + 2700K Retrofit</div>
+                <div class="scenario-meta">UFR 0.01 · Warm Spectrum + Curfew</div>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div class="dock-section-label">Temporal &amp; Flux Controls</div>
+            <div class="slider-row">
+              <div class="slider-header">
+                <span>Local Solar Time</span>
+                <span class="slider-val" id="hour-val">22:00</span>
+              </div>
+              <input id="hour-slider" type="range" min="18" max="23" step="1" value="22" />
+            </div>
+            <div class="slider-row" style="margin-top:10px;">
+              <div class="slider-header">
+                <span>Luminous Flux Override</span>
+                <span class="slider-val" id="dim-val">100%</span>
+              </div>
+              <input id="dim-slider" type="range" min="20" max="100" step="5" value="100" />
+            </div>
+          </div>
+        </aside>
+
+        <aside class="dock-right">
+          <div>
+            <div class="dock-section-label">Strict Unit-Separated Telemetry</div>
+            <div class="kpi-stack">
+              <div class="kpi-card">
+                <div class="kpi-label">Annual Energy</div>
+                <div class="kpi-value" id="kpi-energy">—</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Operating Cost</div>
+                <div class="kpi-value" id="kpi-cost">—</div>
+                <div class="kpi-delta" id="kpi-cost-delta">Reference</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Surface Illuminance $E_h$</div>
+                <div class="kpi-value" id="kpi-lux">—</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">VIIRS Uplight $L_{\text{NTL}}$</div>
+                <div class="kpi-value" id="kpi-radiance">—</div>
+                <div class="kpi-delta" id="kpi-rad-delta">Assumed radiance baseline</div>
+              </div>
+            </div>
+            <div class="kpi-card" style="margin-top:10px;">
+              <div class="kpi-label">Modeled Zenith Sky Brightness $\mu_z$</div>
+              <div class="kpi-value" id="kpi-skymag">—</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
+                Higher $\text{mag/arcsec}^2$ denotes darker sky
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:auto;">
+            <div class="dock-section-label">Fixture Inspection</div>
+            <button class="btn" id="btn-inspect-fixture" style="width:100%;justify-content:center;" disabled>
+              Click a fixture on map
+            </button>
+          </div>
+        </aside>
+
+        <div class="map-legend-bar">
+          <span>$E_h$ Ground Lux</span>
+          <div class="lux-gradient"></div>
+          <span>0 — 20+ lx</span>
+          <span style="opacity:0.4;">|</span>
+          <span>MapLibre GL · deck.gl · NASA GIBS VIIRS</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-scenarios" class="view-panel view-scroll">
+      <div class="container-narrow">
+        <div class="hero-eyebrow">Municipal Mitigation Matrix</div>
+        <h1 class="hero-title">Scenario Comparison &amp; Payback</h1>
+        <p class="hero-lead">
+          Side-by-side evaluation of adaptive curfew dimming and full-cutoff warm-spectrum retrofits, keeping surface illuminance ($E_h$), upward satellite radiance ($L_{\text{NTL}}$), and zenith sky brightness ($\mu_z$) strictly separated.
+        </p>
+
+        <div class="card-surface">
+          <h2>Active Corridor Comparison</h2>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Scenario</th>
+                <th>Annual Energy</th>
+                <th>Operating Cost</th>
+                <th>Retrofit CapEx</th>
+                <th>Simple Payback</th>
+                <th>Upward Radiance $L_{\text{NTL}}$</th>
+                <th>Zenith Sky $\mu_z$</th>
+              </tr>
+            </thead>
+            <tbody id="scenario-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-physics" class="view-panel view-scroll">
+      <div class="container-narrow">
+        <div class="hero-eyebrow">Mathematical &amp; Radiative Transfer Core</div>
+        <h1 class="hero-title">Governing Equations</h1>
+        <p class="hero-lead">
+          All telemetry in Night Atlas is computed from physical radiative transfer and photometric first principles, preserving unit integrity between spaceborne radiance, atmospheric skyglow, and street-level illuminance.
+        </p>
+
+        <div class="card-surface">
+          <h2>1. Surface Horizontal Illuminance ($E_h$)</h2>
+          <div class="eq-block">
+            $$E_h(r) = \sum_{i=1}^{N} \frac{I_i(\theta_i, \phi_i) \cdot \eta_{\text{dim}}(t)}{r_i^2 + h_i^2} \cos\theta_i, \quad \cos\theta_i = \frac{h_i}{\sqrt{r_i^2 + h_i^2}}$$
+            <div class="eq-caption">
+              Where $I_i$ is luminous intensity ($\text{cd}$), $h_i$ is pole height ($\text{m}$), $r_i$ is horizontal offset ($\text{m}$), and $\eta_{\text{dim}}(t) \in [0.2, 1.0]$ is the nocturnal dimming schedule.
+            </div>
+          </div>
+
+          <h2>2. Upward Radiance Calibration ($L_{\text{NTL}}$)</h2>
+          <div class="eq-block">
+            $$L_{\text{NTL}} = L_0 \cdot \eta_{\text{dim}}(t) \cdot \left(\frac{\text{UFR} + \rho(1 - \text{UFR})}{\text{UFR}_0 + \rho(1 - \text{UFR}_0)}\right) \cdot S_{\text{Rayleigh}}(\text{CCT})$$
+            <div class="eq-caption">
+              Satellite context from NASA Black Marble $\text{VNP46A2/VNP46A4}$ ($\text{nW}\cdot\text{cm}^{-2}\cdot\text{sr}^{-1}$), separating direct Upward Flux Ratio ($\text{UFR}$) from Lambertian ground albedo $\rho = 0.14$.
+            </div>
+          </div>
+
+          <h2>3. Zenith Sky Brightness ($\mu_z$)</h2>
+          <div class="eq-block">
+            $$\mu_z = \mu_0 - 2.5 \log_{10}\!\left(1 + \kappa \cdot L_{\text{NTL}}\right) \quad \left[\text{mag}\cdot\text{arcsec}^{-2}\right]$$
+            <div class="eq-caption">
+              Logarithmic transformation from modeled upward radiance to astronomical zenith surface brightness ($\mu_0 \approx 21.95\text{–}22.00\;\text{mag/arcsec}^2$ natural dark sky).
+            </div>
+          </div>
+
+          <h2>4. BACI Intervention Estimator</h2>
+          <div class="eq-block">
+            $$\Delta_{\text{BACI}} = \left(\bar{Y}_{\text{T,after}} - \bar{Y}_{\text{T,before}}\right) - \left(\bar{Y}_{\text{C,after}} - \bar{Y}_{\text{C,before}}\right)$$
+            <div class="eq-caption">
+              Before-After-Control-Impact estimator isolating municipal retrofit impact on $\text{VNP46A2}$ daily lunar-BRDF-corrected radiance from seasonal and atmospheric variance.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-research" class="view-panel view-scroll">
+      <div class="container-narrow">
+        <div class="hero-eyebrow">Preprint Manuscript · International Dark-Sky Policy</div>
+        <h1 class="hero-title" style="font-size:38px;">
+          Building-Aware Urban Lighting &amp; Municipal Lighting Mitigation: A Radiative Transfer Framework
+        </h1>
+        <div class="paper-meta">
+          <span><strong>Author:</strong> Mark Vilpan (Lyceum “Second School”, Moscow)</span>
+          <span><strong>Target Venues:</strong> JEI · IJSL · MDPI Remote Sensing</span>
+          <span><strong>Data:</strong> NASA Black Marble VNP46A2/A4</span>
+        </div>
+
+        <div class="paper-actions">
+          <button class="btn btn-primary" id="btn-print-paper">Print / Save as PDF</button>
+          <button class="btn" id="btn-export-bib">Export BibTeX (.bib)</button>
+        </div>
+
+        <div class="card-surface">
+          <h2>Abstract</h2>
+          <p>
+            Artificial light at night (ALAN) degrades astronomical sky quality, fragments nocturnal ecosystems, and imposes avoidable municipal electricity expenditure. While spaceborne sensors such as the Suomi NPP / NOAA-20 Visible Infrared Imaging Radiometer Suite (VIIRS) Day/Night Band provide global upward radiance ($L_{\text{NTL}}$ in $\text{nW}\cdot\text{cm}^{-2}\cdot\text{sr}^{-1}$), municipal engineers require street-level horizontal illuminance ($E_h$ in $\text{lux}$) and zenith sky brightness ($\mu_z$ in $\text{mag/arcsec}^2$) to evaluate retrofit policies. Here we present <em>Night Atlas</em>, an open radiative-transfer and spatial-planning framework uniting NASA Black Marble VNP46A2/A4 observations with inverse-square streetlamp photometry and Before-After-Control-Impact (BACI) evaluation across five international observatory and ecological buffer corridors.
+          </p>
+
+          <h3>1. Introduction &amp; Unit Separation</h3>
+          <p>
+            A persistent failure mode in civic lighting tools is the conflation of upward top-of-atmosphere radiance with ground-level illuminance. Night Atlas enforces strict physical separation across $L_{\text{NTL}}$, $E_h$, and $\mu_z$, enabling municipalities to test adaptive midnight dimming ($\eta_{\text{dim}} = 0.50$) and full-cutoff warm-spectrum LED retrofits ($\text{UFR} \le 0.01$, $\text{CCT} = 2700\;\text{K}$) without violating pedestrian safety thresholds.
+          </p>
+
+          <h3>2. References &amp; Primary Data Sources</h3>
+          <ol class="citation-list">
+            <li>Román, M. O., et al. (2018). <em>NASA's Black Marble nighttime lights product suite</em>. Remote Sensing of Environment, 210, 113–143. <a href="https://www.earthdata.nasa.gov/data/projects/black-marble" target="_blank" rel="noopener">NASA Earthdata Black Marble</a></li>
+            <li>NASA Global Imagery Browse Services (GIBS). <em>VIIRS Nighttime Lights WMTS API</em>. <a href="https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api" target="_blank" rel="noopener">NASA GIBS API Portal</a></li>
+            <li>Falchi, F., et al. (2016). <em>The new world atlas of artificial night sky brightness</em>. Science Advances, 2(6).</li>
+            <li>MapLibre Organization &amp; vis.gl. <em>MapLibre GL JS &amp; deck.gl WebGL Geospatial Stack</em>. <a href="https://maplibre.org/projects/gl-js/" target="_blank" rel="noopener">MapLibre GL JS</a> · <a href="https://deck.gl/docs/developer-guide/base-maps/using-with-maplibre" target="_blank" rel="noopener">deck.gl</a></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span id="toast-msg"></span>
+    <button id="toast-close" class="toast-close" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.0.32/dist.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
