@@ -1,6 +1,8 @@
 // Night Atlas — Main Application Controller (v2.7 Complete Interactive Lab)
 import { CITY_PRESETS, SCENARIOS, generateGridFixtures } from "./presets.js";
 import {
+  traceFixture3D,
+  effectiveFixture,
   computeScenarioMetrics,
   computeBaciStats,
   computeCalibrationMetrics,
@@ -16,12 +18,14 @@ import {
   toggleViirsOverlay,
   flyToCity,
   setQgisGeoJson,
-  updateSimulationLayers
+  updateSimulationLayers,
+  updateFixtureSkyViewFactors,
+  updateFixtureRayTraces
 } from "./map.js";
 
 const state = {
   activeView: "atlas",
-  city: structuredClone(CITY_PRESETS.geneva),
+  city: { ...structuredClone(CITY_PRESETS.geneva), fixtures: [] },
   scenarioId: "baseline",
   localHour: 22,
   customDimOverride: null,
@@ -31,6 +35,7 @@ const state = {
   interactionMode: "navigate",
   drawnRing: [],
   uploadedSqmPairs: null,
+  uploadedBaci: null,
   uploadedInventory: null,
   selectedFixture: null
 };
@@ -93,6 +98,7 @@ function switchView(viewId) {
   document.querySelectorAll(".view-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === `view-${viewId}`);
   });
+  if (viewId === "atlas") mapInstance?.resize();
   if (viewId === "scenarios") renderScenarioComparison();
   if (viewId === "physics") renderSensitivityChart();
   if (viewId === "calibration") renderCalibrationAndBaci(state.uploadedSqmPairs ?? SAMPLE_SQM_PAIRS);
@@ -153,8 +159,25 @@ function injectExpansionUI() {
   const temporalBlock = dockLeft.children[2];
 
   const primaryToggle = document.createElement("div");
+  primaryToggle.style.display = "flex";
+  primaryToggle.style.flexDirection = "column";
+  primaryToggle.style.gap = "6px";
   primaryToggle.innerHTML = `
-    <button class="btn" id="btn-toggle-lights" style="width:100%;justify-content:center;">Show Lights</button>
+    <div style="display:flex;gap:6px;">
+      <button class="btn" id="btn-toggle-lights" style="flex:1;justify-content:center;">Show Lights</button>
+      <button class="btn" id="btn-clear-lights" style="color:var(--accent-rose);justify-content:center;" title="Remove all lights from map">Clear</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="place-count-select" class="city-select" style="width:74px;padding:6px 8px;" title="Lights to add per click">
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+        <option value="16">16×</option>
+        <option value="25">25×</option>
+      </select>
+      <button class="btn mode-btn" data-mode="place_light" id="btn-quick-place" style="flex:1;justify-content:center;">+ Place Light</button>
+    </div>
   `;
   dockLeft.insertBefore(primaryToggle, temporalBlock);
 
@@ -172,6 +195,13 @@ function injectExpansionUI() {
       </div>
       <div class="slider-row">
         <div class="slider-header">
+          <span>Surface Albedo $\\rho$</span>
+          <span class="slider-val" id="albedo-val">0.14</span>
+        </div>
+        <input id="albedo-slider" type="range" min="0.05" max="0.75" step="0.01" value="0.14" />
+      </div>
+      <div class="slider-row">
+        <div class="slider-header">
           <span>Map Zoom</span>
           <span class="slider-val" id="zoom-val">13.6</span>
         </div>
@@ -179,10 +209,10 @@ function injectExpansionUI() {
       </div>
       <div class="slider-row">
         <div class="slider-header">
-          <span>Fixture Count</span>
-          <span class="slider-val" id="fixture-count-val">16</span>
+          <span>Baseline VIIRS $L_{\\text{NTL}}$ (nW)</span>
+          <span class="slider-val" id="viirs-baseline-val">26.8</span>
         </div>
-        <input id="fixture-count-slider" type="range" min="0" max="100" step="1" value="16" />
+        <input id="viirs-baseline-slider" type="range" min="1" max="150" step="0.5" value="26.8" />
       </div>
       <div>
         <div class="dock-section-label">NASA VIIRS Epoch</div>
@@ -219,7 +249,7 @@ function injectExpansionUI() {
   const dockRight = document.querySelector(".dock-right");
   const complianceBox = document.createElement("div");
   complianceBox.innerHTML = `
-    <div class="dock-section-label">CIE 150 / DarkSky Compliance</div>
+    <div class="dock-section-label">Illustrative scenario checks</div>
     <div id="compliance-badges" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
   `;
   dockRight.insertBefore(complianceBox, dockRight.lastElementChild);
@@ -253,7 +283,9 @@ function injectExpansionUI() {
             <input id="fx-edit-ufr" class="city-select" type="number" min="0" max="0.3" step="0.01" />
           </label>
         </div>
-        <div style="display:flex;gap:6px;margin-top:4px;">
+        <div style="font-size:11px;color:var(--text-secondary);" id="fx-edit-stats"></div>
+        <button class="btn" id="btn-fx-retrofit" style="width:100%;justify-content:center;color:var(--accent-emerald);">Convert to 2700K Full-Cutoff</button>
+        <div style="display:flex;gap:6px;margin-top:2px;">
           <button class="btn" id="btn-fx-move" style="flex:1;justify-content:center;">Move on Map</button>
           <button class="btn" id="btn-fx-delete" style="color:var(--accent-rose);">Delete</button>
         </div>
@@ -273,6 +305,17 @@ function injectExpansionUI() {
       <div id="sensitivity-chart" class="chart-box"></div>
     `;
     physicsContainer.appendChild(sensCard);
+
+    const limitsCard = document.createElement("div");
+    limitsCard.className = "card-surface";
+    limitsCard.innerHTML = `
+      <h2>6. 3D-Building Canyon &amp; Model Assumptions</h2>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        When zoomed to $z \\ge 13$, Night Atlas queries rendered <code>3d-buildings</code> heights ($H$) within an 18 px radius of each fixture to compute an urban-canyon Sky View Factor $\\psi_{\\text{sky}} = \\max(0.25, 1 - H / \\sqrt{H^2 + W^2})$ ($W = 15\\,\text{m}$), attenuating passive upward escape.
+        <strong>Key Assumptions:</strong> (1) ground illuminance $E_h$ is evaluated at a fixed $12\\,\text{m}$ horizontal offset without ray-traced building shadows; (2) surface albedo is fixed at $\\rho = 0.14$ (snow-free asphalt); (3) Walker's Law ($r^{-2.5}$) and $k_{\\text{cal}} = 0.25$ are screening parameters; and (4) tall-building facade/media emissions (e.g., Moscow-City) are not modeled passively.
+      </p>
+    `;
+    physicsContainer.appendChild(limitsCard);
   }
 
   // 2. Add 05 Calibration & BACI and 06 Municipal Audit tabs
@@ -314,6 +357,9 @@ function injectExpansionUI() {
         <div class="card-surface">
           <h2>BACI Intervention Test</h2>
           <p style="font-size:13px;color:var(--text-secondary);">Evaluates VNP46A2 treatment vs. control corridor radiance before and after municipal retrofit.</p>
+          <div style="margin-bottom:10px;">
+            <label class="btn">Upload BACI CSV <input id="baci-file-input" type="file" accept=".csv" hidden /></label>
+          </div>
           <div id="baci-stats" style="font-size:13px;margin-bottom:12px;"></div>
           <div id="baci-chart" class="chart-box"></div>
         </div>
@@ -425,24 +471,29 @@ function renderCalibrationAndBaci(pairs = SAMPLE_SQM_PAIRS) {
     </svg>
   `;
 
-  const tBefore = [48.1, 47.6, 48.9, 48.3, 47.9];
-  const tAfter = [21.4, 20.8, 22.1, 21.6, 21.0];
-  const cBefore = [44.2, 43.9, 44.8, 44.5, 44.1];
-  const cAfter = [43.8, 44.1, 44.5, 43.9, 44.0];
-  const baci = computeBaciStats(tBefore, tAfter, cBefore, cAfter);
+  const baciData = state.uploadedBaci ?? {
+    tBefore: [48.1, 47.6, 48.9, 48.3, 47.9],
+    tAfter: [21.4, 20.8, 22.1, 21.6, 21.0],
+    cBefore: [44.2, 43.9, 44.8, 44.5, 44.1],
+    cAfter: [43.8, 44.1, 44.5, 43.9, 44.0]
+  };
+  const baci = computeBaciStats(baciData.tBefore, baciData.tAfter, baciData.cBefore, baciData.cAfter);
 
   document.getElementById("baci-stats").innerHTML = `
     <div><strong>$\\Delta_{\\text{BACI}}$:</strong> ${formatNumber(baci.deltaBaci, 2)} nW·cm⁻²·sr⁻¹</div>
-    <div><strong>95% CI:</strong> [${formatNumber(baci.ciLow, 2)}, ${formatNumber(baci.ciHigh, 2)}] &nbsp;·&nbsp; <strong>t =</strong> ${formatNumber(baci.tStat, 2)} (${baci.significant ? "p < 0.05" : "n.s."})</div>
-    <div style="font-size:11px;color:var(--accent-amber);margin-top:4px;">Synthetic BACI demonstration series (offline mode).</div>
+    <div><strong>Approx. 95% CI:</strong> [${baci.ciLow === null ? "N/A" : formatNumber(baci.ciLow, 2)}, ${baci.ciHigh === null ? "N/A" : formatNumber(baci.ciHigh, 2)}] &nbsp;·&nbsp; <strong>t =</strong> ${baci.tStat === null ? "N/A (zero variance)" : formatNumber(baci.tStat, 2)} (${baci.significant ? "normal approximation: significant" : "n.s."})</div>
+    <div style="font-size:11px;color:var(--accent-amber);margin-top:4px;">${state.uploadedBaci ? "Using uploaded BACI dataset." : "Synthetic BACI demonstration series (offline mode)."}</div>
   `;
 
+  const values = Object.values(baciData).flat();
+  const low = Math.min(...values), high = Math.max(...values);
+  const seriesPoints = (before, after) => [...before.map((v, i) => [20 + i * 125 / Math.max(1, before.length - 1), v]), ...after.map((v, i) => [175 + i * 120 / Math.max(1, after.length - 1), v])].map(([x, v]) => `${x},${145 - (v - low) * 110 / Math.max(1, high - low)}`).join(" ");
   document.getElementById("baci-chart").innerHTML = `
     <svg viewBox="0 0 320 180" width="100%" height="170" xmlns="http://www.w3.org/2000/svg">
       <line x1="160" y1="15" x2="160" y2="155" stroke="#ffd60a" stroke-dasharray="4 3"/>
       <text x="164" y="25" fill="#ffd60a" font-size="9">Retrofit Date</text>
-      <polyline fill="none" stroke="#a1a1a6" stroke-width="2" points="20,55 55,58 90,52 125,54 155,56 175,58 210,55 245,59 295,57"/>
-      <polyline fill="none" stroke="#0071e3" stroke-width="2.5" points="20,42 55,44 90,39 125,41 155,43 175,118 210,122 245,116 295,120"/>
+      <polyline fill="none" stroke="#a1a1a6" stroke-width="2" points="${seriesPoints(baciData.cBefore, baciData.cAfter)}"/>
+      <polyline fill="none" stroke="#0071e3" stroke-width="2.5" points="${seriesPoints(baciData.tBefore, baciData.tAfter)}"/>
       <text x="24" y="168" fill="#0071e3" font-size="9">● Treatment Corridor</text>
       <text x="165" y="168" fill="#a1a1a6" font-size="9">● Control Corridor</text>
     </svg>
@@ -468,10 +519,26 @@ function renderMunicipalAudit(inventory) {
     .join("");
 }
 
+function commitFixtureEditorInputs() {
+  const fx = state.selectedFixture;
+  if (!fx) return;
+  const w = parseFloat(document.getElementById("fx-edit-watt")?.value);
+  if (Number.isFinite(w) && w > 0) fx.wattage = w;
+  const h = parseFloat(document.getElementById("fx-edit-height")?.value);
+  if (Number.isFinite(h) && h > 0) fx.heightM = h;
+  const c = parseInt(document.getElementById("fx-edit-cct")?.value, 10);
+  if (Number.isFinite(c)) fx.cct = c;
+  const u = parseFloat(document.getElementById("fx-edit-ufr")?.value);
+  if (Number.isFinite(u) && u >= 0) fx.ufr = Math.min(1, u);
+}
+
 function updateTelemetryAndMap() {
   const scenario = SCENARIOS[state.scenarioId];
+  updateFixtureSkyViewFactors(state.city);
+  updateFixtureRayTraces(state.city, scenario, state.localHour, state.customDimOverride);
   const baseMetrics = computeScenarioMetrics(state.city, SCENARIOS.baseline, state.localHour, null, state.customTauOverride);
   const m = computeScenarioMetrics(state.city, scenario, state.localHour, state.customDimOverride, state.customTauOverride);
+  renderBuildingExperiment(m.activeDim);
 
   document.getElementById("kpi-energy").innerHTML = `${formatNumber(m.annualKwh)} <span class="kpi-unit">kWh/yr</span>`;
   document.getElementById("kpi-cost").innerHTML = `$${formatNumber(m.annualCost)} <span class="kpi-unit">/yr</span>`;
@@ -485,7 +552,7 @@ function updateTelemetryAndMap() {
   document.getElementById("kpi-cost-delta").textContent =
     state.scenarioId === "baseline" ? "Reference" : `-${formatNumber(costSavingsPct, 1)}% vs baseline`;
   document.getElementById("kpi-rad-delta").textContent =
-    state.scenarioId === "baseline" ? "VNP46A4 baseline" : `-${formatNumber(radDropPct, 1)}% uplight`;
+    state.scenarioId === "baseline" ? "Assumed radiance baseline" : `-${formatNumber(radDropPct, 1)}% uplight`;
 
   const comp = evaluatePolicyCompliance(scenario, m);
   const compEl = document.getElementById("compliance-badges");
@@ -503,6 +570,12 @@ function updateTelemetryAndMap() {
   const countSlider = document.getElementById("fixture-count-slider");
   if (countVal) countVal.textContent = String(state.city.fixtures.length);
   if (countSlider) countSlider.value = String(Math.min(100, state.city.fixtures.length));
+  const viirsBaseVal = document.getElementById("viirs-baseline-val");
+  const viirsBaseSlider = document.getElementById("viirs-baseline-slider");
+  if (viirsBaseVal) {
+    viirsBaseVal.textContent = state.city.id === "custom" ? `${formatNumber(state.city.baselineViirsRadiance, 1)} (est.)` : formatNumber(state.city.baselineViirsRadiance, 1);
+  }
+  if (viirsBaseSlider) viirsBaseSlider.value = String(state.city.baselineViirsRadiance);
 
   const emptyEl = document.getElementById("fixture-editor-empty");
   const formEl = document.getElementById("fixture-editor-form");
@@ -512,10 +585,33 @@ function updateTelemetryAndMap() {
       formEl.style.display = "flex";
       document.getElementById("fx-edit-title").textContent =
         `${state.selectedFixture.id} (${state.selectedFixture.lat.toFixed(4)}, ${state.selectedFixture.lon.toFixed(4)})`;
-      document.getElementById("fx-edit-watt").value = state.selectedFixture.wattage;
-      document.getElementById("fx-edit-height").value = state.selectedFixture.heightM;
-      document.getElementById("fx-edit-cct").value = String(state.selectedFixture.cct);
-      document.getElementById("fx-edit-ufr").value = state.selectedFixture.ufr;
+      const wattEl = document.getElementById("fx-edit-watt");
+      const heightEl = document.getElementById("fx-edit-height");
+      const cctEl = document.getElementById("fx-edit-cct");
+      const ufrEl = document.getElementById("fx-edit-ufr");
+      if (wattEl && document.activeElement !== wattEl) wattEl.value = state.selectedFixture.wattage;
+      if (heightEl && document.activeElement !== heightEl) heightEl.value = state.selectedFixture.heightM;
+      if (cctEl && document.activeElement !== cctEl) cctEl.value = String(state.selectedFixture.cct);
+      if (ufrEl && document.activeElement !== ufrEl) ufrEl.value = state.selectedFixture.ufr;
+      const fxStatsEl = document.getElementById("fx-edit-stats");
+      if (fxStatsEl) {
+        const fxKwh = ((state.selectedFixture.wattage || 120) * 4100) / 1000;
+        const h = Math.max(1, state.selectedFixture.heightM || 10);
+        const lum = (state.selectedFixture.wattage || 120) * (state.selectedFixture.efficacyLmW || 130) * m.activeDim * (1 - effectiveFixture(state.selectedFixture, scenario).ufr * 0.5);
+        const d2 = 144 + h * h;
+        const fxLux = (lum / (2 * Math.PI * d2)) * (h / Math.sqrt(d2));
+        const svf = typeof state.selectedFixture.skyViewFactor === "number" ? state.selectedFixture.skyViewFactor : 1.0;
+        const rt = state.selectedFixture.rayTrace;
+        const meanLx = rt ? rt.meanGroundLux : fxLux;
+        const peakLx = rt ? rt.peakGroundLux : fxLux;
+        const escPct = rt ? Math.round(rt.directEscapeFactor * 100) : Math.round(svf * 100);
+        fxStatsEl.textContent = `Est. ${formatNumber(fxKwh)} kWh/yr · Mean ${formatNumber(meanLx, 1)} lx (Peak ${formatNumber(peakLx, 1)} lx) · Escape ${escPct}%`;
+      }
+      const albedoValEl = document.getElementById("albedo-val");
+      const albedoSliderEl = document.getElementById("albedo-slider");
+      const rhoVal = Number(state.city.surfaceAlbedo ?? 0.14);
+      if (albedoValEl) albedoValEl.textContent = formatNumber(rhoVal, 2);
+      if (albedoSliderEl && document.activeElement !== albedoSliderEl) albedoSliderEl.value = String(rhoVal);
     } else {
       emptyEl.style.display = "block";
       formEl.style.display = "none";
@@ -542,8 +638,9 @@ function updateTelemetryAndMap() {
     state.customDimOverride,
     state.customTauOverride,
     (fx) => {
+      commitFixtureEditorInputs();
       state._justClickedFixture = true;
-      state.selectedFixture = fx;
+      state.selectedFixture = state.city.fixtures.find((f) => f.id === fx.id) || fx;
       updateTelemetryAndMap();
       showToast(`Selected ${fx.id} — edit specs or click map in Move Light mode`);
     },
@@ -599,9 +696,9 @@ async function handleCitySearch(query) {
     dropdown.innerHTML = items
       .map(
         (it) => `
-      <div class="search-item" data-lon="${it.lon}" data-lat="${it.lat}" data-name="${it.display_name.split(",")[0]}">
-        <div class="search-item-title">${it.display_name.split(",")[0]}</div>
-        <div class="search-item-sub">${it.display_name}</div>
+      <div class="search-item" data-lon="${it.lon}" data-lat="${it.lat}" data-name="${escapeHtml(it.display_name.split(",")[0])}">
+        <div class="search-item-title">${escapeHtml(it.display_name.split(",")[0])}</div>
+        <div class="search-item-sub">${escapeHtml(it.display_name)}</div>
       </div>`
       )
       .join("");
@@ -625,7 +722,7 @@ async function handleCitySearch(query) {
           naturalSkyMag: 21.95,
           aerosolTau: 0.2,
           description: `Live geocoded municipal corridor centered on ${label} (${lat.toFixed(4)}, ${lon.toFixed(4)}).`,
-          fixtures: generateGridFixtures([lon, lat], 16, 4000, 120, 11)
+          fixtures: []
         };
         state.selectedFixture = null;
         state.customTauOverride = null;
@@ -644,11 +741,11 @@ async function handleCitySearch(query) {
 
 function exportBibtex() {
   const bib = `@article{vilpan2026nightatlas,
-  title   = {Satellite-Calibrated Urban Skyglow and Municipal Lighting Mitigation: A Radiative Transfer Framework},
+  title   = {Building-Aware Urban Lighting and Municipal Lighting Mitigation: A Radiative Transfer Framework},
   author  = {Vilpan, Mark},
   year    = {2026},
   journal = {Night Atlas Technical Preprint},
-  note    = {Calibrated against NASA Black Marble VNP46A2/VNP46A4 VIIRS Day/Night Band Radiance}
+  note    = {Satellite context from NASA Black Marble VNP46A2/VNP46A4 VIIRS Day/Night Band Radiance}
 }`;
   navigator.clipboard?.writeText(bib);
   const blob = new Blob([bib], { type: "text/plain" });
@@ -661,6 +758,7 @@ function exportBibtex() {
 
 document.addEventListener("DOMContentLoaded", () => {
   injectExpansionUI();
+  injectResearchTools();
 
   mapInstance = initMap("map-container", state.city);
   mapInstance.on("load", () => updateTelemetryAndMap());
@@ -674,31 +772,96 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  let buildingRefreshTimer;
+  mapInstance.on("sourcedata", (event) => {
+    if (event.sourceId !== "openmap" || !event.isSourceLoaded) return;
+    clearTimeout(buildingRefreshTimer);
+    buildingRefreshTimer = setTimeout(() => updateTelemetryAndMap(), 150);
+  });
+  mapInstance.on("moveend", () => {
+    if (state.lightsVisible && mapInstance.getZoom() >= 13) {
+      updateTelemetryAndMap();
+    }
+  });
+
+  let draggingFixture = null;
+  let dragRaf = null;
+  mapInstance.on("mousedown", (e) => {
+    if (!state.lightsVisible) return;
+    if (state.interactionMode !== "navigate" && state.interactionMode !== "move_light") return;
+    const hit = state.city.fixtures.find((f) => {
+      const pt = mapInstance.project([f.lon, f.lat]);
+      return Math.hypot(pt.x - e.point.x, pt.y - e.point.y) <= 14;
+    });
+    if (!hit) return;
+    commitFixtureEditorInputs();
+    e.preventDefault();
+    mapInstance.dragPan.disable();
+    draggingFixture = hit;
+    state.selectedFixture = hit;
+    state._justClickedFixture = true;
+    mapInstance.getCanvas().style.cursor = "grabbing";
+    updateTelemetryAndMap();
+  });
+
+  mapInstance.on("mousemove", (e) => {
+    if (!draggingFixture) return;
+    draggingFixture.lon = Number(e.lngLat.lng.toFixed(6));
+    draggingFixture.lat = Number(e.lngLat.lat.toFixed(6));
+    if (!dragRaf) {
+      dragRaf = requestAnimationFrame(() => {
+        dragRaf = null;
+        updateTelemetryAndMap();
+      });
+    }
+  });
+
+  mapInstance.on("mouseup", () => {
+    if (!draggingFixture) return;
+    const movedId = draggingFixture.id;
+    draggingFixture = null;
+    mapInstance.dragPan.enable();
+    mapInstance.getCanvas().style.cursor = state.interactionMode === "navigate" ? "" : "crosshair";
+    updateTelemetryAndMap();
+    showToast(`Moved ${movedId}`);
+  });
+
   mapInstance.on("click", (e) => {
     if (state._justClickedFixture) {
       state._justClickedFixture = false;
-      return;
+      if (state.interactionMode !== "place_light") return;
     }
     const { lng, lat } = e.lngLat;
     if (state.interactionMode === "place_light") {
-      const id = `FX-C${state.city.fixtures.length + 1}`;
-      const newFx = {
-        id,
-        lon: Number(lng.toFixed(6)),
-        lat: Number(lat.toFixed(6)),
-        wattage: 120,
-        efficacyLmW: 130,
-        heightM: 10,
-        cct: SCENARIOS[state.scenarioId].cctKelvin,
-        ufr: SCENARIOS[state.scenarioId].ufr
-      };
-      state.city.fixtures.push(newFx);
-      state.selectedFixture = newFx;
+      const addCount = Math.max(1, parseInt(document.getElementById("place-count-select")?.value || "1", 10));
+      const sc = SCENARIOS[state.scenarioId];
+      const baseIdx = Math.max(0, ...state.city.fixtures.map((f) => Number(/^FX-C(\d+)$/.exec(f.id)?.[1]) || 0));
+      const newFixtures =
+        addCount === 1
+          ? [
+              {
+                id: `FX-C${baseIdx + 1}`,
+                lon: Number(lng.toFixed(6)),
+                lat: Number(lat.toFixed(6)),
+                wattage: 120,
+                efficacyLmW: 130,
+                heightM: 10,
+                cct: sc.cctKelvin,
+                ufr: sc.ufr
+              }
+            ]
+          : generateGridFixtures([lng, lat], addCount, sc.cctKelvin, 120, 10).map((f, idx) => ({
+              ...f,
+              id: `FX-C${baseIdx + idx + 1}`,
+              ufr: sc.ufr
+            }));
+      state.city.fixtures.push(...newFixtures);
+      state.selectedFixture = newFixtures[0];
       state.lightsVisible = true;
       const tb = document.getElementById("btn-toggle-lights");
       if (tb) tb.textContent = "Hide Lights";
       updateTelemetryAndMap();
-      showToast(`Placed ${id} at ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+      showToast(`Added ${addCount} light${addCount > 1 ? "s" : ""} at ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
     } else if (state.interactionMode === "move_light") {
       if (!state.selectedFixture) {
         showToast("Click a fixture first to select it before moving.");
@@ -722,7 +885,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("city-preset-select").addEventListener("change", (e) => {
     const preset = CITY_PRESETS[e.target.value];
     if (!preset) return;
-    state.city = structuredClone(preset);
+    state.city = { ...structuredClone(preset), fixtures: [] };
     state.selectedFixture = null;
     state.customTauOverride = null;
     document.getElementById("tau-slider").value = preset.aerosolTau;
@@ -735,9 +898,7 @@ document.addEventListener("DOMContentLoaded", () => {
     card.addEventListener("click", () => {
       state.scenarioId = card.dataset.scenario;
       state.customDimOverride = null;
-      state.lightsVisible = true;
-      const toggleBtn = document.getElementById("btn-toggle-lights");
-      if (toggleBtn) toggleBtn.textContent = "Hide Lights";
+
       document.querySelectorAll(".scenario-card").forEach((c) => c.classList.remove("active"));
       card.classList.add("active");
       document.getElementById("dim-slider").value = Math.round(
@@ -753,6 +914,13 @@ document.addEventListener("DOMContentLoaded", () => {
     updateTelemetryAndMap();
   });
 
+  document.getElementById("btn-clear-lights")?.addEventListener("click", () => {
+    state.city.fixtures = [];
+    state.selectedFixture = null;
+    updateTelemetryAndMap();
+    showToast("Cleared all lights from map");
+  });
+
   document.getElementById("btn-clear-drawn")?.addEventListener("click", () => {
     state.drawnRing = [];
     setQgisGeoJson(null);
@@ -763,51 +931,78 @@ document.addEventListener("DOMContentLoaded", () => {
   const setInteractionMode = (mode) => {
     state.interactionMode = mode;
     document.querySelectorAll(".mode-btn").forEach((b) => {
-      b.classList.toggle("active", b.dataset.mode === mode);
+      const isMatch = b.dataset.mode === mode;
+      b.classList.toggle("active", isMatch);
+      if (b.id === "btn-quick-place") b.classList.toggle("btn-primary", isMatch);
     });
     mapInstance.getCanvas().style.cursor = mode === "navigate" ? "" : "crosshair";
   };
 
   document.querySelectorAll(".mode-btn").forEach((btn) => {
-    btn.addEventListener("click", () => setInteractionMode(btn.dataset.mode));
+    btn.addEventListener("click", () => {
+      const targetMode = btn.dataset.mode;
+      if (btn.id === "btn-quick-place" && state.interactionMode === "place_light") {
+        setInteractionMode("navigate");
+        return;
+      }
+      setInteractionMode(targetMode);
+    });
   });
 
-  document.getElementById("fx-edit-watt")?.addEventListener("change", (e) => {
-    if (!state.selectedFixture) return;
-    const val = parseFloat(e.target.value);
-    if (!Number.isFinite(val) || val <= 0) return;
-    state.selectedFixture.wattage = val;
-    updateTelemetryAndMap();
+  const bindFixtureField = (id, applyFn) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const handler = (e) => {
+      if (!state.selectedFixture) return;
+      if (applyFn(state.selectedFixture, e.target.value)) {
+        updateTelemetryAndMap();
+      }
+    };
+    el.addEventListener("input", handler);
+    el.addEventListener("change", handler);
+  };
+
+  bindFixtureField("fx-edit-watt", (fx, raw) => {
+    const val = parseFloat(raw);
+    if (!Number.isFinite(val) || val <= 0) return false;
+    fx.wattage = val;
+    return true;
   });
 
-  document.getElementById("fx-edit-height")?.addEventListener("change", (e) => {
-    if (!state.selectedFixture) return;
-    const val = parseFloat(e.target.value);
-    if (!Number.isFinite(val) || val <= 0) return;
-    state.selectedFixture.heightM = val;
-    updateTelemetryAndMap();
+  bindFixtureField("fx-edit-height", (fx, raw) => {
+    const val = parseFloat(raw);
+    if (!Number.isFinite(val) || val <= 0) return false;
+    fx.heightM = val;
+    return true;
   });
 
-  document.getElementById("fx-edit-cct")?.addEventListener("change", (e) => {
-    if (!state.selectedFixture) return;
-    const val = parseInt(e.target.value, 10);
-    if (!Number.isFinite(val)) return;
-    state.selectedFixture.cct = val;
-    updateTelemetryAndMap();
+  bindFixtureField("fx-edit-cct", (fx, raw) => {
+    const val = parseInt(raw, 10);
+    if (!Number.isFinite(val)) return false;
+    fx.cct = val;
+    return true;
   });
 
-  document.getElementById("fx-edit-ufr")?.addEventListener("change", (e) => {
-    if (!state.selectedFixture) return;
-    const val = parseFloat(e.target.value);
-    if (!Number.isFinite(val) || val < 0) return;
-    state.selectedFixture.ufr = Math.min(1, val);
-    updateTelemetryAndMap();
+  bindFixtureField("fx-edit-ufr", (fx, raw) => {
+    const val = parseFloat(raw);
+    if (!Number.isFinite(val) || val < 0) return false;
+    fx.ufr = Math.min(1, val);
+    return true;
   });
 
   document.getElementById("btn-fx-move")?.addEventListener("click", () => {
     if (!state.selectedFixture) return;
     setInteractionMode("move_light");
     showToast(`Click anywhere on the map to relocate ${state.selectedFixture.id}`);
+  });
+
+  document.getElementById("btn-fx-retrofit")?.addEventListener("click", () => {
+    if (!state.selectedFixture) return;
+    state.selectedFixture.cct = 2700;
+    state.selectedFixture.ufr = 0.01;
+    state.selectedFixture.wattage = Math.max(40, Math.round((state.selectedFixture.wattage || 120) * 0.7));
+    updateTelemetryAndMap();
+    showToast(`Retrofitted ${state.selectedFixture.id} to 2700K Full-Cutoff`);
   });
 
   document.getElementById("btn-fx-delete")?.addEventListener("click", () => {
@@ -817,6 +1012,11 @@ document.addEventListener("DOMContentLoaded", () => {
     state.selectedFixture = null;
     updateTelemetryAndMap();
     showToast(`Deleted ${removedId}`);
+  });
+
+  document.getElementById("viirs-baseline-slider")?.addEventListener("input", (e) => {
+    state.city.baselineViirsRadiance = parseFloat(e.target.value);
+    updateTelemetryAndMap();
   });
 
   document.getElementById("zoom-slider").addEventListener("input", (e) => {
@@ -854,14 +1054,8 @@ document.addEventListener("DOMContentLoaded", () => {
     updateTelemetryAndMap();
   });
 
-  document.getElementById("fixture-count-slider").addEventListener("input", (e) => {
-    const count = parseInt(e.target.value, 10);
-    document.getElementById("fixture-count-val").textContent = String(count);
-    const sc = SCENARIOS[state.scenarioId];
-    state.city.fixtures = generateGridFixtures(state.city.center, count, sc.cctKelvin, 120, 10);
-    state.lightsVisible = true;
-    const tb = document.getElementById("btn-toggle-lights");
-    if (tb) tb.textContent = "Hide Lights";
+  document.getElementById("albedo-slider")?.addEventListener("input", (e) => {
+    state.city.surfaceAlbedo = parseFloat(e.target.value);
     updateTelemetryAndMap();
   });
 
@@ -908,6 +1102,32 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("toast").classList.remove("show");
   });
 
+  document.getElementById("baci-file-input")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.trim().split(/\r?\n/).slice(1);
+    const baci = { tBefore: [], tAfter: [], cBefore: [], cAfter: [] };
+    for (const line of lines) {
+      const cols = line.split(",").map((s) => s.trim().toLowerCase());
+      if (cols.length < 3) continue;
+      const val = parseFloat(cols[2]);
+      if (!Number.isFinite(val)) continue;
+      if (cols[0].startsWith("t") && cols[1].startsWith("b")) baci.tBefore.push(val);
+      else if (cols[0].startsWith("t") && cols[1].startsWith("a")) baci.tAfter.push(val);
+      else if (cols[0].startsWith("c") && cols[1].startsWith("b")) baci.cBefore.push(val);
+      else if (cols[0].startsWith("c") && cols[1].startsWith("a")) baci.cAfter.push(val);
+    }
+    if (Object.values(baci).every((group) => group.length >= 2)) {
+      state.uploadedBaci = baci;
+      renderCalibrationAndBaci(state.uploadedSqmPairs ?? SAMPLE_SQM_PAIRS);
+      renderLatex();
+      showToast("Loaded custom BACI dataset");
+    } else {
+      showToast("CSV needs at least two finite radiance observations in each treatment/control before/after group.");
+    }
+  });
+
   document.getElementById("sqm-file-input")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -917,7 +1137,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .map((l) => l.split(","))
       .filter((c) => c.length >= 6)
       .map((c) => ({ id: c[0], observed: parseFloat(c[4]), modeled: parseFloat(c[5]) }))
-      .filter((p) => !Number.isNaN(p.observed) && !Number.isNaN(p.modeled));
+      .filter((p) => Number.isFinite(p.observed) && Number.isFinite(p.modeled));
     if (parsed.length) {
       state.uploadedSqmPairs = parsed;
       renderCalibrationAndBaci(parsed);
@@ -954,6 +1174,10 @@ document.addEventListener("DOMContentLoaded", () => {
         ufr: parseFloat(c[5]),
         heightM: parseFloat(c[6])
       }));
+    if (parsed.some((f) => ![f.lat, f.lon, f.wattage, f.cct, f.ufr, f.heightM].every(Number.isFinite) || Math.abs(f.lat) > 90 || Math.abs(f.lon) > 180 || f.wattage <= 0 || f.cct <= 0 || f.heightM <= 0 || f.ufr < 0 || f.ufr > 1)) {
+      showToast("Inventory rejected: check coordinates and numeric fixture specifications.");
+      return;
+    }
     if (parsed.length) {
       state.uploadedInventory = parsed;
       renderMunicipalAudit(parsed);
@@ -992,13 +1216,14 @@ function injectWelcomeScreen() {
   overlay.className = "welcome-overlay";
   if (sessionStorage.getItem("nightAtlasWelcomeDismissed") === "1") {
     overlay.classList.add("hidden");
+    overlay.inert = true;
   }
   overlay.innerHTML = `
     <div class="welcome-panel">
       <div class="hero-eyebrow">Night Atlas · International Skyglow Lab</div>
       <h1 class="welcome-title">See the night. Quantify the sky.</h1>
       <p class="welcome-sub">
-        A radiative-transfer and municipal lighting mitigation lab uniting NASA Black Marble VIIRS radiometry with street-level photometry.
+        A building-aware urban lighting simulation. Explore how geometry, lamp height, shielding, and dimming affect predicted illumination. Field validation is the next research step.
       </p>
       <div class="welcome-grid">
         <button class="welcome-tile" data-launch="atlas">
@@ -1024,6 +1249,7 @@ function injectWelcomeScreen() {
   const dismiss = (targetView = null) => {
     sessionStorage.setItem("nightAtlasWelcomeDismissed", "1");
     overlay.classList.add("hidden");
+    overlay.inert = true;
     if (targetView) switchView(targetView);
   };
 
@@ -1033,5 +1259,48 @@ function injectWelcomeScreen() {
   });
   document.querySelector(".brand")?.addEventListener("click", () => {
     overlay.classList.remove("hidden");
+    overlay.inert = false;
   });
+}
+
+
+function injectResearchTools() {
+  const card = document.createElement("div");
+  card.className = "research-summary";
+  card.innerHTML = `<span class="badge badge-fail">Simulation · not field validated</span>
+    <h3>Research question</h3>
+    <p>How does including surrounding buildings change predicted street-level illumination?</p>
+    <details><summary>Hypothesis &amp; method</summary><p>Hypothesis: ignoring buildings overestimates illumination in obstructed areas. Compare the same fixture with and without buildings, holding lamp settings constant. Vary height, shielding, and dimming. Evaluate mean lux, shadowed area, and upward escape; energy use is unchanged by geometry alone.</p><p>These are model comparisons. Field measurements are required to establish accuracy.</p></details>`;
+  document.querySelector('.dock-left').prepend(card);
+  const panel = document.createElement('details');
+  panel.className = 'research-summary';
+  panel.innerHTML = `<summary>Building Effect experiment</summary><p>Compares the selected fixture, or the first placed light.</p><button class="btn" id="run-building-experiment">Run comparison</button><div id="building-experiment-result" aria-live="polite"></div>`;
+  document.querySelector('.dock-right').prepend(panel);
+  document.getElementById('run-building-experiment').addEventListener('click', () => {
+    panel.dataset.hasRun = 'true';
+    updateTelemetryAndMap();
+  });
+  const status = document.createElement('p');
+  status.className = 'model-status';
+  status.textContent = 'Simulation outputs · Fixture settings and environmental parameters are assumed/user-entered. NASA imagery is satellite context. No measured inputs are connected to this simulation.';
+  document.querySelector('.dock-right').prepend(status);
+}
+
+function renderBuildingExperiment(activeDim) {
+  const target = document.getElementById('building-experiment-result');
+  if (!target || target.parentElement.dataset.hasRun !== 'true') return;
+  const fixture = state.selectedFixture || state.city.fixtures[0];
+  if (!fixture) {
+    target.textContent = 'Place a light on the map, then run the comparison.';
+    return;
+  }
+  const open = traceFixture3D(effectiveFixture(fixture, SCENARIOS[state.scenarioId]), [], activeDim, state.city.surfaceAlbedo ?? 0.14, 0.25);
+  const built = fixture.rayTrace;
+  if (!built) { target.textContent = 'Building geometry is loading. Run again when the map has loaded.'; return; }
+  const rows = [
+    ['Mean ground lux', open.meanGroundLux, built.meanGroundLux, ' lx'],
+    ['Shadowed samples', open.shadowedFraction * 100, built.shadowedFraction * 100, '%'],
+    ['Direct upward escape', open.directEscapeFactor * 100, built.directEscapeFactor * 100, '%']
+  ];
+  target.innerHTML = `<p><strong>${escapeHtml(fixture.id)}</strong> · identical fixture and dimming</p><div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Metric</th><th>Open</th><th>Buildings</th><th>Change</th></tr></thead><tbody>${rows.map(([name,a,b,unit]) => `<tr><td>${name}</td><td>${formatNumber(a,1)}${unit}</td><td>${formatNumber(b,1)}${unit}</td><td>${b-a>=0?'+':''}${formatNumber(b-a,1)}${unit === '%' ? ' pp' : unit}</td></tr>`).join('')}</tbody></table></div><p>Shadow fraction counts sampled ground cells, not area-weighted coverage. Building results depend on loaded map geometry. Equal results can mean no obstruction or missing building data. This comparison does not establish real-world accuracy.</p>`;
 }

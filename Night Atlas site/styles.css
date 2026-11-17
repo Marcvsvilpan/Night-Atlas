@@ -336,3 +336,39 @@ input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer;
   gap: 12px;
   margin-top: 12px;
 }
+
+/* Keep controls reachable on narrow screens and with keyboard navigation. */
+:where(button, input, select, summary, a):focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 3px;
+}
+@media (max-width: 1150px) {
+  .topbar { height: 86px; flex-wrap: wrap; }
+  .nav-tabs { order: 3; width: 100%; overflow-x: auto; white-space: nowrap; }
+  .app-main { padding-top: 86px; }
+  .view-panel { height: calc(100vh - 86px); }
+  .map-floating-top { top: 10px; min-width: 0; width: calc(100% - 28px); max-width: none; }
+  .dock-left, .dock-right { top: 66px; }
+  .map-legend-bar { display: none; }
+}
+@media (max-width: 680px) {
+  .brand-sub { display: none; }
+  .dock-left, .dock-right { width: calc(50% - 18px); padding: 10px; border-radius: 16px; top: auto; bottom: 8px; height: 42%; }
+  .dock-left { left: 12px; }
+  .dock-right { right: 12px; }
+  .kpi-stack { grid-template-columns: 1fr; }
+  .view-scroll { padding: 24px 12px 48px; }
+  .card-surface { padding: 18px; overflow-x: auto; }
+  .welcome-panel { padding: 24px 16px; max-height: 90vh; overflow-y: auto; }
+  .welcome-grid { grid-template-columns: 1fr; }
+  .map-floating-top { flex-wrap: wrap; border-radius: 18px; }
+  .search-wrap { flex-basis: 100%; }
+}
+
+.research-summary { font-size: 12px; line-height: 1.5; border-bottom: 1px solid var(--border-hairline); padding-bottom: 12px; }
+.research-summary h3 { margin: 8px 0; font-size: 14px; }
+.research-summary p, .model-status { color: var(--text-secondary); }
+.research-summary summary { cursor: pointer; font-weight: 600; }
+.research-summary .data-table { font-size: 11px; }
+.research-summary .data-table td, .research-summary .data-table th { padding: 6px; }
+.model-status { font-size: 11px; line-height: 1.5; margin: 0; }

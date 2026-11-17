@@ -3,10 +3,10 @@ Night Atlas — Server-Side NASA Black Marble VNP46A2/VNP46A4 Proxy
 Keeps NASA_EARTHDATA_TOKEN out of client-side browser code.
 """
 import os
-from typing import List
+from typing import Annotated, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, FiniteFloat
 import numpy as np
 
 app = FastAPI(title="Night Atlas NASA Black Marble Proxy", version="2.5.0")
@@ -20,10 +20,10 @@ app.add_middleware(
 
 
 class BaciRequest(BaseModel):
-    treatment_before: List[float]
-    treatment_after: List[float]
-    control_before: List[float]
-    control_after: List[float]
+    treatment_before: Annotated[List[FiniteFloat], Field(min_length=2, max_length=100000)]
+    treatment_after: Annotated[List[FiniteFloat], Field(min_length=2, max_length=100000)]
+    control_before: Annotated[List[FiniteFloat], Field(min_length=2, max_length=100000)]
+    control_after: Annotated[List[FiniteFloat], Field(min_length=2, max_length=100000)]
 
 
 @app.get("/api/health")
@@ -44,15 +44,8 @@ def get_vnp46_timeseries(lat: float, lon: float, start_year: int = 2016, end_yea
             status_code=503,
             detail="NASA_EARTHDATA_TOKEN not configured on server; using client-side offline mode.",
         )
-    return {
-        "lat": lat,
-        "lon": lon,
-        "product": "VNP46A4",
-        "units": "nW·cm^-2·sr^-1",
-        "start_year": start_year,
-        "end_year": end_year,
-        "status": "ready_for_granule_query",
-    }
+    raise HTTPException(status_code=501, detail="Live granule retrieval is not implemented. Use the local HDF5 ingestion CLI.")
+
 
 
 @app.post("/api/baci")
@@ -71,11 +64,11 @@ def compute_baci(req: BaciRequest):
             + ca.var(ddof=1) / len(ca)
         )
     )
-    t_stat = float(delta / se) if se > 0 else 0.0
+    t_stat = float(delta / se) if se > 0 else None
     return {
         "delta_baci": float(delta),
         "std_error": se,
         "t_stat": t_stat,
-        "ci_95": [float(delta - 1.96 * se), float(delta + 1.96 * se)],
-        "significant_at_0_05": abs(t_stat) > 1.96,
+        "ci_95": [float(delta - 1.96 * se), float(delta + 1.96 * se)] if se > 0 else None,
+        "significant_at_0_05": se > 0 and abs(t_stat) > 1.96,
     }
